@@ -1,0 +1,25 @@
+# Core
+python-dotenv
+pydantic>=2.5
+requests
+rich
+typer
+loguru
+
+# Storage
+sqlalchemy
+alembic
+orjson
+
+# AI / ML
+sentence-transformers
+faiss-cpu
+tiktoken
+
+# Reliability
+tenacity
+schedule
+
+# Delivery (optional now, useful later)
+python-telegram-bot
+email-validator
