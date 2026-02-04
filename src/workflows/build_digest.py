@@ -18,7 +18,8 @@ class DigestRow:
     url: str
     score: int | None
     payload: dict
-    metadata: dict  # ✅ NEW (HN points/comments/etc live here)
+    metadata: dict
+    summary: str
 
 
 def _today_str() -> str:
@@ -39,6 +40,7 @@ def build_digest_for_persona(persona: str, out_dir: str = "out") -> dict:
     s = get_settings()
     cutoff = datetime.utcnow() - timedelta(hours=s.time_window_hours)
 
+    # 1) Load kept rows for this persona within time window
     with Session(engine) as session:
         rows = (
             session.query(Evaluation, Item)
@@ -50,34 +52,52 @@ def build_digest_for_persona(persona: str, out_dir: str = "out") -> dict:
             .all()
         )
 
+    # 2) Build digest rows (add summary + metadata)
     digest_rows: list[DigestRow] = []
     for ev, it in rows:
+        payload = ev.payload_json or {}
+        metadata = it.metadata_json or {}
+
+        # ✅ Summary (NO extra model call)
+        # Prefer payload["summary"] if you add it later in evaluator schema.
+        # For now, fallback to good signals from existing fields.
+        if persona == "GENAI_NEWS":
+            summary = payload.get("summary") or payload.get("topic") or ""
+        else:
+            summary = payload.get("summary") or payload.get("solution_summary") or ""
+
+        summary = str(summary).strip()
+
         digest_rows.append(
             DigestRow(
                 title=it.title,
                 url=it.url,
                 score=ev.score,
-                payload=ev.payload_json or {},
-                metadata=it.metadata_json or {},  # ✅ NEW
+                payload=payload,
+                metadata=metadata,
+                summary=summary,
             )
         )
 
     date_s = _today_str()
     slug = persona.lower()
 
-    # JSON output (now includes metadata for Telegram engagement badges)
+    # 3) JSON output (includes summary + metadata for Telegram)
     json_path = out / f"{slug}_{date_s}.json"
     json_data = {
         "persona": persona,
         "date": date_s,
+        "window_hours": s.time_window_hours,
+        "cutoff_utc": cutoff.isoformat(timespec="seconds"),
         "count": len(digest_rows),
         "items": [
             {
                 "title": r.title,
                 "url": r.url,
                 "score": r.score,
+                "summary": r.summary,         # ✅ NEW
                 "evaluation": r.payload,
-                "metadata": r.metadata,  # ✅ NEW
+                "metadata": r.metadata,       # ✅ NEW
             }
             for r in digest_rows
         ],
@@ -87,7 +107,7 @@ def build_digest_for_persona(persona: str, out_dir: str = "out") -> dict:
         encoding="utf-8",
     )
 
-    # Markdown output (also show HN points/comments if present)
+    # 4) Markdown output (also show HN points/comments if present)
     md_path = out / f"{slug}_{date_s}.md"
     lines: list[str] = []
     lines.append(f"# {persona} Digest — {date_s}\n")
@@ -102,6 +122,9 @@ def build_digest_for_persona(persona: str, out_dir: str = "out") -> dict:
             if r.score is not None:
                 lines.append(f"- Score: {r.score}\n")
 
+            if r.summary:
+                lines.append(f"- Summary: {r.summary}\n")
+
             # Engagement badges (HN points/comments) if present in metadata_json
             points = r.metadata.get("score") or r.metadata.get("points")
             comments = r.metadata.get("comments") or r.metadata.get("descendants")
@@ -113,7 +136,7 @@ def build_digest_for_persona(persona: str, out_dir: str = "out") -> dict:
                     badge_parts.append(f"💬 {comments}")
                 lines.append(f"- Engagement: {' | '.join(badge_parts)}\n")
 
-            # persona-specific fields
+            # Persona-specific fields
             if persona == "GENAI_NEWS":
                 lines.append(f"- Topic: {r.payload.get('topic','')}\n")
                 lines.append(f"- Why it matters: {r.payload.get('why_it_matters','')}\n")
